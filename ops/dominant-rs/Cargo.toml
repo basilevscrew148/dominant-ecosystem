@@ -1,0 +1,8 @@
+[package]
+name = "dominant-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Формальная модель доминанты Ухтомского: precision-weighting + инерция + хронотоп (Rust, std-only)"
+license = "MIT"
+
+[dependencies]

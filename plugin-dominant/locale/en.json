@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Dominant",
+    "description": "Holds the current dominant (A. A. Ukhtomsky) as a persistent goal, chronotope target and parking list, exposed as the `dominant` tool. Encodes focus + inhibition + anticipation as agent base logic."
+  }
+}
