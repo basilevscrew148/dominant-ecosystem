@@ -1,275 +1,132 @@
-//! dominant-rs — исполняемая формальная модель доминанты А. А. Ухтомского.
+//! Демо и сценарии кросс-валидации (зеркала dominant_sim.py v1 и dominant_sim2.py v2).
 //!
-//! Модель объединяет три гипотезы экосистемы «Доминанта»:
-//!   1) доминанта ≈ precision-weighting (Фристон): внимание повышает точность
-//!      (precision) канала, соответствующего доминирующему очагу возбуждения;
-//!   2) инерция: возбуждение накапливается и не исчезает мгновенно;
-//!   3) хронотоп: цель (модель потребного будущего, Н. А. Бернштейн) смещает
-//!      приоритеты стимулов, реализуя антиципацию разрешения.
+//! Запуск:
+//!   cargo run --release --                    # демо (5 стимулов, таблица траектории)
+//!   cargo run --release -- --scenario v1      # сценарий v1: инерция + сопряжённое торможение
+//!   cargo run --release -- --scenario v2      # сценарий v2, без хронотопа
+//!   cargo run --release -- --scenario v2 --chrono  # сценарий v2, с тягой хронотопа
 //!
-//! Запуск: cargo run -- [--steps N] [--seed S] [--goal G]
-//! Пример: cargo run -- --steps 60 --seed 7 --goal 2
+//! Машиночитаемый итог сценария — строка `FINAL x0 x1 ...`.
 
+use dominant_rs::*;
 use std::env;
 
-/// Стимул внешнего мира: сродство к цели (хронотоп) и «сырая» сила.
-#[derive(Clone, Debug)]
-struct Stimulus {
-    id: &'static str,
-    /// Базовая сила стимула (salience), 0..1.
-    salience: f64,
-    /// Сродство стимула цели (goal relevance), 0..1. Реализует хронотоп.
-    goal_relevance: f64,
-}
+const DEMO_STIMULI: [Stimulus; 5] = [
+    Stimulus { id: "работа (доминанта-цель)", salience: 0.45, goal_relevance: 1.0 },
+    Stimulus { id: "уведомления", salience: 0.55, goal_relevance: 0.0 },
+    Stimulus { id: "письмо по теме", salience: 0.50, goal_relevance: 0.9 },
+    Stimulus { id: "новости/шум", salience: 0.40, goal_relevance: 0.0 },
+    Stimulus { id: "идея-инкубатор", salience: 0.35, goal_relevance: 0.6 },
+];
 
-/// Состояние одного очага возбуждения.
-#[derive(Clone, Copy, Debug)]
-struct Focus {
-    /// Уровень возбуждения (логит-подобная шкала).
-    excitation: f64,
-}
+fn demo() {
+    let p = Params { dominance_threshold: 0.5, dominance_gap: 0.2, ..Default::default() };
+    let goal = 2;
+    let mut rng = Rng::new(7);
+    let mut x: Vec<f64> = vec![0.0; DEMO_STIMULI.len()];
+    let s: Vec<f64> = DEMO_STIMULI.iter().map(|st| st.salience).collect();
+    let g: Vec<f64> = DEMO_STIMULI.iter().map(|st| st.goal_relevance).collect();
 
-/// Параметры модели.
-struct Params {
-    /// Базовая точность (precision) канала без внимания.
-    base_precision: f64,
-    /// Прирост precision за единицу возбуждения (precision-weighting).
-    attention_gain: f64,
-    /// Инерция: доля возбуждения, сохраняющаяся за шаг (0..1).
-    inertia: f64,
-    /// Сопряжённое торможение: сила подавления конкурентов доминантой.
-    lateral_inhibition: f64,
-    /// Порог доминирования (очаг выше порога — кандидат в доминанты).
-    dominance_threshold: f64,
-    /// Минимальный разрыв между лидером и вторым (устойчивость доминанты).
-    dominance_gap: f64,
-    /// Шум среды (дисперсия гауссова шума на шаг).
-    noise: f64,
-}
-
-/// Быстрый детерминированный ГПСЧ (xorshift64*), чтобы не тянуть зависимости.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Rng(seed.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(1).max(1))
-    }
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.0 = x;
-        x.wrapping_mul(0x2545F4914F6CDD1D)
-    }
-    /// Стандартное нормальное число (Box–Muller).
-    fn normal(&mut self) -> f64 {
-        let u1 = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-        let u2 = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
-        (-2.0 * u1.max(1e-12).ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
-    }
-}
-
-/// Один шаг динамики: возбуждение, торможение, инерция, шум.
-fn step(
-    stimuli: &[Stimulus],
-    foci: &mut [Focus],
-    p: &Params,
-    rng: &mut Rng,
-    goal: usize,
-) {
-    // 1) Precision-weighting: внимание поднимает точность канала.
-    let precisions: Vec<f64> = foci
-        .iter()
-        .map(|f| p.base_precision + p.attention_gain * f.excitation.max(0.0))
-        .collect();
-    // 2) Эффективный вход: salience * precision * (1 + хронотоп-усиление).
-    let inputs: Vec<f64> = stimuli
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let chronotope_boost = if i == goal { 1.0 } else { 0.0 };
-            s.salience * precisions[i] * (1.0 + s.goal_relevance * chronotope_boost)
-                + p.noise * rng.normal()
-        })
-        .collect();
-    // 3) Сопряжённое торможение: лидер подавляет конкурентов.
-    let leader = foci
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.excitation.partial_cmp(&b.1.excitation).unwrap())
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-    let next: Vec<f64> = foci
-        .iter()
-        .enumerate()
-        .map(|(i, f)| {
-            let inhibition = if i != leader {
-                p.lateral_inhibition * foci[leader].excitation.max(0.0)
-            } else {
-                0.0
-            };
-            // 4) Инерция + новый вход − торможение, с насыщением tanh
-            // (биологический предел частоты разряда; без насыщения модель расходится).
-            (p.inertia * f.excitation + inputs[i] - inhibition).tanh()
-        })
-        .collect();
-    for (i, f) in foci.iter_mut().enumerate() {
-        f.excitation = next[i];
-    }
-}
-
-fn main() {
-    let mut steps = 60usize;
-    let mut seed = 7u64;
-    let mut goal = 2usize;
-
-    let args: Vec<String> = env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--steps" => {
-                steps = args[i + 1].parse().expect("--steps N");
-                i += 1;
-            }
-            "--seed" => {
-                seed = args[i + 1].parse().expect("--seed S");
-                i += 1;
-            }
-            "--goal" => {
-                goal = args[i + 1].parse().expect("--goal G");
-                i += 1;
-            }
-            other => panic!("неизвестный аргумент: {other}"),
-        }
-        i += 1;
-    }
-
-    let stimuli = vec![
-        Stimulus { id: "работа (доминанта-цель)", salience: 0.45, goal_relevance: 1.0 },
-        Stimulus { id: "уведомления", salience: 0.55, goal_relevance: 0.0 },
-        Stimulus { id: "письмо по теме", salience: 0.50, goal_relevance: 0.9 },
-        Stimulus { id: "новости/шум", salience: 0.40, goal_relevance: 0.0 },
-        Stimulus { id: "идея-инкубатор", salience: 0.35, goal_relevance: 0.6 },
-    ];
-    assert!(goal < stimuli.len());
-
-    let p = Params {
-        base_precision: 1.0,
-        attention_gain: 0.9,
-        inertia: 0.85,
-        lateral_inhibition: 0.35,
-        dominance_threshold: 0.5,
-        dominance_gap: 0.2,
-        noise: 0.05,
-    };
-
-    let mut rng = Rng::new(seed);
-    let mut foci: Vec<Focus> = vec![Focus { excitation: 0.0 }; stimuli.len()];
-    let mut dominant: Option<usize> = None;
+    println!("dominant-rs демо (цель: {})", DEMO_STIMULI[goal].id);
+    let mut dominant_now: Option<usize> = None;
     let mut resolved_at: Option<usize> = None;
     let mut parking: Vec<&'static str> = Vec::new();
-
-    println!("dominant-rs: {steps} шагов, seed={seed}, цель={}", stimuli[goal].id);
-    println!("шаг\t{}\tдоминанта\tсобытие", stimuli.iter().map(|s| s.id).collect::<Vec<_>>().join("\t"));
-
-    for t in 0..steps {
-        step(&stimuli, &mut foci, &p, &mut rng, goal);
-
-        // Определение доминанты: максимум выше порога и отрыв от второго.
-        let mut order: Vec<usize> = (0..foci.len()).collect();
-        order.sort_by(|&a, &b| foci[b].excitation.partial_cmp(&foci[a].excitation).unwrap());
-        let leader = order[0];
-        let runner_up = order[1];
-        let leader_val = foci[leader].excitation;
-        let gap = leader_val - foci[runner_up].excitation;
-
-        let mut event = String::new();
-        let new_dominant = if leader_val >= p.dominance_threshold && gap >= p.dominance_gap {
-            Some(leader)
-        } else {
-            None
-        };
-        if new_dominant != dominant {
-            dominant = new_dominant;
-            if let Some(d) = dominant {
-                event.push_str(&format!("доминанта захвачена: {}", stimuli[d].id));
-            } else {
-                event.push_str("доминанта потеряна (конкуренция)");
+    for t in 0..40 {
+        step(&mut x, &p, &mut rng, goal, &s, &g);
+        let new_dominant = dominant(&x, &p);
+        if new_dominant != dominant_now {
+            dominant_now = new_dominant;
+            match dominant_now {
+                Some(d) => println!("t={t}: доминанта захвачена: {}", DEMO_STIMULI[d].id),
+                None => println!("t={t}: доминанта потеряна (конкуренция)"),
             }
         }
-
-        // Разрешение: доминанта совпала с целью — хронотоп замкнулся.
-        if resolved_at.is_none() && dominant == Some(goal) {
+        if resolved_at.is_none() && dominant_now == Some(goal) {
             resolved_at = Some(t);
-            event.push_str(" => ХРОНОТОП РАЗРЕШЁН: цель достигнута");
         }
-
-        // Парковка: всё, что было подавлено, пока доминанта активна.
-        if let Some(d) = dominant {
-            for (i, s) in stimuli.iter().enumerate() {
-                if i != d && !parking.contains(&s.id) {
-                    parking.push(s.id);
+        if let Some(d) = dominant_now {
+            for (i, st) in DEMO_STIMULI.iter().enumerate() {
+                if i != d && !parking.contains(&st.id) {
+                    parking.push(st.id);
                 }
             }
         }
-
-        let row: Vec<String> = foci.iter().map(|f| format!("{:.2}", f.excitation)).collect();
-        println!("{t}\t{}\t{}\t{}", row.join("\t"), dominant.map(|d| stimuli[d].id).unwrap_or("—"), event);
     }
-
-    match resolved_at {
-        Some(t) => println!("\nИтог: цель достигнута на шаге {t} (антиципация разрешения сработала)."),
-        None => println!("\nИтог: цель не достигнута за {steps} шагов (шум/торможение победили инерцию)."),
-    }
-    println!("Парковка (сопряжённо заторможенное): {}", parking.join(", "));
+    println!(
+        "\nИтог: {}; парковка: {}",
+        resolved_at
+            .map(|t| format!("хронотоп разрешён на шаге {t}"))
+            .unwrap_or_else(|| "цель не достигнута".into()),
+        parking.join(", ")
+    );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn доминанта_захватывается_целевым_стимулом() {
-        let stimuli = vec![
-            Stimulus { id: "цель", salience: 0.5, goal_relevance: 1.0 },
-            Stimulus { id: "шум", salience: 0.6, goal_relevance: 0.0 },
-        ];
-        let p = Params {
-            base_precision: 1.0,
-            attention_gain: 0.9,
-            inertia: 0.85,
-            lateral_inhibition: 0.35,
-            dominance_threshold: 1.2,
-            dominance_gap: 0.3,
-            noise: 0.0,
-        };
-        let mut rng = Rng::new(1);
-        let mut foci = vec![Focus { excitation: 0.0 }; 2];
-        for _ in 0..40 {
-            step(&stimuli, &mut foci, &p, &mut rng, 0);
+/// Сценарий v1 — зеркало dominant_sim.py: N=5, цель t∈[100,600) (s=1.5),
+/// дистрактор t∈[350,380) (s=1.3). Параметры подобраны так, чтобы
+/// ρ+w ≈ 1.2 (как self_w=1.2 в v1) — бистабильность → персистентность.
+fn scenario_v1() {
+    let p = Params {
+        self_excitation: 0.4,
+        inertia: 0.8,
+        attention_gain: 0.3,
+        noise: 0.02,
+        ..Default::default()
+    };
+    let mut rng = Rng::new(7);
+    let mut x: Vec<f64> = vec![0.0; 5];
+    let g = [0.0f64; 5];
+    for t in 0..1200 {
+        let mut s = [0.0f64; 5];
+        if (100..600).contains(&t) {
+            s[0] = 1.5;
         }
-        // Без шума хронотоп-усиление + инерция должны вывести цель в лидеры.
-        assert!(foci[0].excitation > foci[1].excitation);
+        if (350..380).contains(&t) {
+            s[1] = 1.3;
+        }
+        step(&mut x, &p, &mut rng, 0, &s, &g);
     }
+    println!("FINAL {}", x.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>().join(" "));
+}
 
-    #[test]
-    fn инерция_сохраняет_возбуждение_без_входа() {
-        let p = Params {
-            base_precision: 1.0,
-            attention_gain: 0.9,
-            inertia: 0.8,
-            lateral_inhibition: 0.0,
-            dominance_threshold: 9.9,
-            dominance_gap: 0.0,
-            noise: 0.0,
-        };
-        let mut rng = Rng::new(2);
-        let stimuli = vec![Stimulus { id: "нет входа", salience: 0.0, goal_relevance: 0.0 }];
-        let mut foci = vec![Focus { excitation: 1.0 }];
-        step(&stimuli, &mut foci, &p, &mut rng, 0);
-        // 0.8·1.0 = 0.8, затем насыщение tanh(0.8) ≈ 0.664:
-        // возбуждение сохраняется частично и не обнуляется мгновенно.
-        assert!((foci[0].excitation - 0.8_f64.tanh()).abs() < 1e-12);
+/// Сценарий v2 — зеркало dominant_sim2.py: N=3, цель t∈[100,400) (s=1.5),
+/// дистрактор t∈[300,330) (s=1.3). --chrono включает тягу хронотопа γ·(T−x).
+fn scenario_v2(chrono: bool) {
+    let p = Params {
+        self_excitation: 0.1,
+        inertia: 0.8,
+        attention_gain: 0.3,
+        noise: 0.02,
+        chronotope_pull: if chrono { 0.05 } else { 0.0 },
+        ..Default::default()
+    };
+    let mut rng = Rng::new(7);
+    let mut x: Vec<f64> = vec![0.0; 3];
+    let g = [if chrono { 1.0 } else { 0.0 }, 0.0, 0.0];
+    for t in 0..600 {
+        let mut s = [0.0f64; 3];
+        if (100..400).contains(&t) {
+            s[0] = 1.5;
+        }
+        if (300..330).contains(&t) {
+            s[1] = 1.3;
+        }
+        step(&mut x, &p, &mut rng, 0, &s, &g);
+        if t == 335 {
+            println!("MID {}", x.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>().join(" "));
+        }
+    }
+    println!("FINAL {}", x.iter().map(|v| format!("{v:.3}")).collect::<Vec<_>>().join(" "));
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    match args.get(1).map(|s| s.as_str()) {
+        None => demo(),
+        Some("--scenario") => match args.get(2).map(|s| s.as_str()) {
+            Some("v1") => scenario_v1(),
+            Some("v2") => scenario_v2(args.iter().any(|a| a == "--chrono")),
+            other => panic!("неизвестный сценарий: {other:?}"),
+        },
+        other => panic!("неизвестный аргумент: {other:?}"),
     }
 }

@@ -1,6 +1,11 @@
 # Публикация экосистемы «Доминанта» на GitHub
 
-Репозиторий подготовлен локально: git init выполнен, LICENSE добавлен, **первый коммит сделан (2026-11-26)**, `.gitignore` добавлен (`target/` исключён).
+**✅ Опубликовано 2026-11-26:** https://github.com/basilevscrew148/dominant-ecosystem (ветка `main`, push через `gh repo create --public --source=. --remote=origin --push`).
+
+<details>
+<summary>История (как это делалось)</summary>
+
+Репозиторий подготовлен локально: git init, LICENSE, первый коммит (2026-11-26), `.gitignore` (`target/` исключён).
 
 **Текущий блокер:** на этой машине нет авторизации GitHub — `gh auth status`: не залогинен; `GH_TOKEN`/`GITHUB_TOKEN` не заданы. Пуш невозможен без авторизации.
 
