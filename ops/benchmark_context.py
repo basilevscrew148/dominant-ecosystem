@@ -14,7 +14,7 @@ def find_key():
     return m.group(1) if m else None
 
 def ask(key, model, prompt):
-    body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 200}).encode()
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 1, "max_tokens": 200}).encode()
     req = urllib.request.Request(BASE, data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
     with urllib.request.urlopen(req, timeout=90) as r:
         return json.loads(r.read().decode())["choices"][0]["message"]["content"]
