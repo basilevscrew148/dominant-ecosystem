@@ -192,11 +192,11 @@ fn main() {
         };
         if new_dominant != dominant {
             dominant = new_dominant;
-            event.push_str(if let Some(d) = dominant {
-                &format!("доминанта захвачена: {}", stimuli[d].id)
+            if let Some(d) = dominant {
+                event.push_str(&format!("доминанта захвачена: {}", stimuli[d].id));
             } else {
-                "доминанта потеряна (конкуренция)"
-            });
+                event.push_str("доминанта потеряна (конкуренция)");
+            }
         }
 
         // Разрешение: доминанта совпала с целью — хронотоп замкнулся.
