@@ -1,9 +1,19 @@
 # Публикация экосистемы «Доминанта» на GitHub
 
-Репозиторий подготовлен локально (git init выполнен, LICENSE добавлен). Чтобы опубликовать:
+Репозиторий подготовлен локально: git init выполнен, LICENSE добавлен, **первый коммит сделан (2026-11-26)**, `.gitignore` добавлен (`target/` исключён).
+
+**Текущий блокер:** на этой машине нет авторизации GitHub — `gh auth status`: не залогинен; `GH_TOKEN`/`GITHUB_TOKEN` не заданы. Пуш невозможен без авторизации.
+
+## 0. Авторизоваться (одно из двух)
+
+```powershell
+gh auth login          # интерактивно, через браузер
+# или классический токен:
+git remote add origin https://<токен>@github.com/<ваш-логин>/dominant-ecosystem.git
+```
 
 ## 1. Создать удалённый репозиторий
-На github.com: **New repository** → имя `dominant-ecosystem` (или своё) → без README (у нас свой).
+На github.com: **New repository** → имя `dominant-ecosystem` (или своё) → без README (у нас свой). Либо: `gh repo create dominant-ecosystem --public --source=. --push` (сделает и репозиторий, и пуш).
 
 ## 2. Подключить и запушить
 

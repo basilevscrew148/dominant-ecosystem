@@ -78,7 +78,6 @@ fn step(
     rng: &mut Rng,
     goal: usize,
 ) {
-    let n = stimuli.len();
     // 1) Precision-weighting: внимание поднимает точность канала.
     let precisions: Vec<f64> = foci
         .iter()
@@ -110,8 +109,9 @@ fn step(
             } else {
                 0.0
             };
-            // 4) Инерция + новый вход − торможение.
-            p.inertia * f.excitation + inputs[i] - inhibition
+            // 4) Инерция + новый вход − торможение, с насыщением tanh
+            // (биологический предел частоты разряда; без насыщения модель расходится).
+            (p.inertia * f.excitation + inputs[i] - inhibition).tanh()
         })
         .collect();
     for (i, f) in foci.iter_mut().enumerate() {
@@ -159,8 +159,8 @@ fn main() {
         attention_gain: 0.9,
         inertia: 0.85,
         lateral_inhibition: 0.35,
-        dominance_threshold: 1.2,
-        dominance_gap: 0.3,
+        dominance_threshold: 0.5,
+        dominance_gap: 0.2,
         noise: 0.05,
     };
 
@@ -268,7 +268,8 @@ mod tests {
         let stimuli = vec![Stimulus { id: "нет входа", salience: 0.0, goal_relevance: 0.0 }];
         let mut foci = vec![Focus { excitation: 1.0 }];
         step(&stimuli, &mut foci, &p, &mut rng, 0);
-        // 0.8 * 1.0 = 0.8: возбуждение не обнуляется мгновенно.
-        assert!((foci[0].excitation - 0.8).abs() < 1e-12);
+        // 0.8·1.0 = 0.8, затем насыщение tanh(0.8) ≈ 0.664:
+        // возбуждение сохраняется частично и не обнуляется мгновенно.
+        assert!((foci[0].excitation - 0.8_f64.tanh()).abs() < 1e-12);
     }
 }
